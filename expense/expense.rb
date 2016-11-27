@@ -1,18 +1,20 @@
 #! /usr/bin/env ruby
 
 require "pg"
-
+require "io/console"
 
 
 
 class ExpenseData
   def initialize
     @connection= PG.connect(dbname: "expenses")
+    setup_schema
   end
 
   def list_expenses
     results = @connection.exec("select * from expenses order by created_on asc")
-    display_expenses(results)
+    display_count(results) 
+    display_expenses(results) if results.ntuples > 0
   end
 
   def add_expense(amount, memo)
@@ -24,7 +26,8 @@ class ExpenseData
   def search_expenses(criteria)
     sql = "select * from expenses where memo ILIKE $1"
     result = @connection.exec_params(sql, ["%#{criteria}%"])
-    display_expenses(result)
+    display_count(result) 
+    display_expenses(result) if result.ntuples > 0
   end
 
   def delete_expense(id)
@@ -42,6 +45,11 @@ class ExpenseData
     end
   end
 
+  def clear_all_expenses
+    @connection.exec("delete from expenses")
+    puts "All expenses have been deleted."
+  end
+
   private 
 
   def display_expenses(expenses)
@@ -53,7 +61,39 @@ class ExpenseData
 
       puts columns.join(" | ")
     end
+    puts "-" * 50 
+
+    amount_sum = expenses.field_values("amount").map(&:to_f).inject(:+)
+
+    puts "Total #{amount_sum.to_s.rjust(25)}"
   end
+
+  def display_count(expenses)
+    count = expenses.ntuples
+    if count == 0 
+      puts "There are no expenses."
+    else
+      puts "There are #{count} expense#{"s" if count != 1}."
+    end
+  end
+
+  def setup_schema 
+     result = @connection.exec <<-sql
+       select count(*) from information_schema.tables 
+       where table_schema = 'public' and table_name = 'expenses';
+     sql
+
+     if result[0]["count"] == "0"
+      @connection.exec <<-sql
+        create table expenses (
+        id serial primary key,
+        amount numeric(6,2) not null check (amount >= 0.01),
+        memo text not null,
+        created_on date not null
+        );
+      sql
+  end
+
 end
 
 class CLI
@@ -75,6 +115,10 @@ class CLI
       @application.search_expenses(arguments[0])
     when "delete"
       @application.delete_expense(arguments[0])
+    when "clear"
+      puts "This will remove all expenses. Are you sure? (y/n)"
+      response = $stdin.getch
+      @application.clear_all_expenses if response == "y"
     else
       display_help
     end
